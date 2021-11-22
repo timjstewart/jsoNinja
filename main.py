@@ -1,16 +1,15 @@
 import io
-import sys
 import logging
-
+import sys
 from abc import ABC, abstractmethod
-from typing import List, Any, Optional, Dict, Iterator, Union
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import jsonpath
-from jinja2 import Environment
 import yaml
+from jinja2 import Environment
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,27 +18,38 @@ JSON = Union[str, bool, List[Any], Dict[str, Any]]
 
 
 class DataStore:
-
     def __init__(self) -> None:
-        self._dict = defaultdict(dict)
+        self._dict: Dict = defaultdict(dict)
 
     def set(self, key_path, value: JSON) -> None:
-        obj, key = self._get_dict_and_key(key_path)
-        obj[key] = value
+        result = self._get_dict_and_key(key_path)
+        if result:
+            obj, key = result
+            obj[key] = value
+        else:
+            LOGGER.error("set could not find path: %s", key_path)
 
     def append(self, key_path, value: JSON) -> None:
-        obj, key = self._get_dict_and_key(key_path)
-        if not isinstance(obj[key], list):
-            obj[key] = []
-        obj[key].append(value)
+        result = self._get_dict_and_key(key_path)
+        if result:
+            obj, key = result
+            if not isinstance(obj[key], list):
+                obj[key] = []
+            obj[key].append(value)
+        else:
+            LOGGER.error("append could not find path: %s", key_path)
 
     def extend(self, key_path, value: JSON) -> None:
-        obj, key = self._get_dict_and_key(key_path)
-        if not isinstance(obj[key], list):
-            obj[key] = []
-        obj[key].extend(value)
+        result = self._get_dict_and_key(key_path)
+        if result:
+            obj, key = result
+            if not isinstance(obj[key], list):
+                obj[key] = []
+            obj[key].extend(value)
+        else:
+            LOGGER.error("extend could not find path: %s", key_path)
 
-    def _get_dict_and_key(self, key_path) -> Optional[Dict[str, JSON]]:
+    def _get_dict_and_key(self, key_path) -> Optional[Tuple[Dict, str]]:
         keys = key_path.strip().split(".")
         curr = self._dict
         for key in keys[:-1]:
@@ -65,12 +75,6 @@ class Line:
 
 class Source(ABC):
     pass
-    # @abstractmethod
-    # def source(self) -> str:
-    #     pass
-
-    # def source_type(self) -> str:
-    #     pass
 
 
 class TextData(Source):
@@ -83,11 +87,12 @@ class String(TextData):
     """
     Text data that can be safely held in memory in a single string
     """
+
     def __init__(self, value: str) -> None:
         self.value = value
 
     def lines(self) -> Iterator[Line]:
-        for i, line in enumerate(self.value.split('\n'), 1):
+        for i, line in enumerate(self.value.split("\n"), 1):
             yield Line(i, line)
 
 
@@ -96,6 +101,7 @@ class TextFile(TextData):
     Text data that comes from a file where reading the entire file into memory
     may not be feasible.
     """
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -122,8 +128,7 @@ class JsonFile(JsonDataSource):
         self.path = path
 
     def root(self) -> JSON:
-        return yaml.load(self.path.read_text(),
-                         Loader=yaml.SafeLoader)
+        return yaml.load(self.path.read_text(), Loader=yaml.SafeLoader)
 
 
 class JsonDict(JsonDataSource):
@@ -134,22 +139,16 @@ class JsonDict(JsonDataSource):
         return self.json_obj
 
 
-@dataclass
-class Sink:
-    output_path: str
-    template_path: Path
-
+class Sink(ABC):
+    @abstractmethod
     def send(self, store: DataStore) -> None:
-        LOGGER.info("sending data to sink: %s %s",
-                    self.output_path,
-                    self.template_path)
+        ...
 
 
 class JinjaTemplateSink(Sink):
     def __init__(self, template_path: Path, output_path: Path) -> None:
         self.template_path = template_path
         self.output_path = output_path
-
 
     def send(self, store: DataStore) -> None:
         env = Environment()
@@ -158,9 +157,7 @@ class JinjaTemplateSink(Sink):
         self.output_path.write_text(result)
 
 
-
 class JsonCollector(ABC):
-
     def __init__(self, json_path: str) -> None:
         """
         |param json_path| a JSONPath string that will be used to collect data.
@@ -198,7 +195,7 @@ class JsonStaticListAppender(JsonCollector):
 
 
 class JsonPipe:
-    def __init__(self, source: JsonDataSource, *collectors: List[JsonCollector]) -> None:
+    def __init__(self, source: JsonDataSource, *collectors: JsonCollector) -> None:
         self.source = source
         self.collectors = list(collectors)
 
@@ -224,16 +221,20 @@ class Transformer:
 def main(_args: List[str]) -> None:
     xform = Transformer(
         sources=[
-            JsonPipe(JsonFile(Path("examples/test.json")),
-                     JsonStaticListExtender("$.[*].name", "data.people.names"))
-            ],
+            JsonPipe(
+                JsonFile(Path("examples/test.json")),
+                JsonStaticListExtender("$.[*].name", "data.people.names"),
+            )
+        ],
         sinks=[
             JinjaTemplateSink(
                 template_path=Path("./templates/people-text.jinja"),
-                output_path=Path("./output/test.txt"))
-            ])
+                output_path=Path("./output/test.txt"),
+            )
+        ],
+    )
     xform.run()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main(sys.argv[1:])
