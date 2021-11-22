@@ -1,0 +1,4 @@
+Jinja2==3.0.3
+jq==1.2.1
+networkx==2.6.3
+PyYAML==6.0
