@@ -119,7 +119,7 @@ class TextFile(TextData):
 
 class JsonDataSource(Source):
     @abstractmethod
-    def root(self) -> JSON:
+    def roots(self) -> Iterator[JSON]:
         ...
 
 
@@ -127,16 +127,16 @@ class JsonFile(JsonDataSource):
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def root(self) -> JSON:
-        return yaml.load(self.path.read_text(), Loader=yaml.SafeLoader)
+    def roots(self) -> Iterator[JSON]:
+        yield yaml.load(self.path.read_text(), Loader=yaml.SafeLoader)
 
 
 class JsonDict(JsonDataSource):
     def __init__(self, json_obj: JSON) -> None:
         self.json_obj = json_obj
 
-    def root(self) -> JSON:
-        return self.json_obj
+    def roots(self) -> Iterator[JSON]:
+        yield self.json_obj
 
 
 class Sink(ABC):
@@ -194,15 +194,26 @@ class JsonStaticListAppender(JsonCollector):
         data_store.append(self.key_path, json_obj)
 
 
+
+class JsonFileGlob(JsonDataSource):
+    def __init__(self, glob_str: str) -> None:
+        self.glob_str = glob_str
+
+    def roots(self) -> Iterator[JSON]:
+        for path in Path('.').glob(self.glob_str):
+            yield from JsonFile(path).roots()
+
+
+
 class JsonPipe:
     def __init__(self, source: JsonDataSource, *collectors: JsonCollector) -> None:
         self.source = source
         self.collectors = list(collectors)
 
     def run(self, store: DataStore) -> None:
-        json_obj = self.source.root()
-        for collector in self.collectors:
-            collector.run(json_obj, store)
+        for json_obj in self.source.roots():
+            for collector in self.collectors:
+                collector.run(json_obj, store)
 
 
 class Transformer:
@@ -216,6 +227,7 @@ class Transformer:
             source.run(store)
         for sink in self.sinks:
             sink.send(store)
+        print(store)
 
 
 def main(_args: List[str]) -> None:
@@ -223,6 +235,10 @@ def main(_args: List[str]) -> None:
         sources=[
             JsonPipe(
                 JsonFile(Path("examples/test.json")),
+                JsonStaticListExtender("$.[*].name", "data.people.names"),
+            ),
+            JsonPipe(
+                JsonFileGlob("examples/data_*.json"),
                 JsonStaticListExtender("$.[*].name", "data.people.names"),
             )
         ],
